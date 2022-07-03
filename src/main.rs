@@ -1,77 +1,17 @@
-use std::fs::{self, File};
-use std::io::Read;
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::io;
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 
-const BUFFER_LEN: usize = 1024 * 1024; // 1 MiB
+mod group_by_inode;
+use group_by_inode::{group_by_inode, DedupFile};
 
-// Vital stats of a file.
-//
-// TODO: hashing files only makes sense if we expect to find files that are duplicated 3 or more
-// times.  If there are 2 copies of a file, it's faster to compare them byte-by-byte.  If there is
-// only one copy of a file, calculating a hash is a wasted operation.  CRC32 is fast but weak, so
-// we may wish to compare files byte-by-byte anyway.
-#[derive(Debug)]
-struct DedupFile {
-    path: PathBuf,
-    size: u64,
-    dev: u64,
-    ino: u64,
-    nlink: u64,
-    hash: Option<u32>,
-}
+mod group_by_content;
+use group_by_content::group_by_content;
 
-// Calculate the CRC32 checksum of a file.
-fn calc_crc32(path: &Path) -> Result<u32> {
-    use crc32fast::Hasher;
-
-    let mut file = File::open(path)?;
-    let mut hasher = Hasher::new();
-    let mut buffer = [0; BUFFER_LEN];
-
-    loop {
-        let read_count = file.read(&mut buffer)?;
-        hasher.update(&buffer[..read_count]);
-
-        if read_count != BUFFER_LEN {
-            break;
-        }
-    }
-
-    Ok(hasher.finalize())
-}
-
-// Recursively descend through a filesystem hierarchy, collecting information about only regular
-// files.
-fn visit(path: &Path, min_size: u64) -> Result<Vec<DedupFile>> {
-    let metadata = fs::symlink_metadata(path)?;
-    let mut dedup_files: Vec<DedupFile> = Vec::new();
-
-    if metadata.is_dir() {
-        // Recurse over directory contents.
-        for dir_entry in fs::read_dir(path)? {
-            let mut child_dedup_files: Vec<DedupFile> = visit(&dir_entry?.path(), min_size)?;
-            dedup_files.append(&mut child_dedup_files);
-        }
-    } else if metadata.is_file() && metadata.len() >= min_size {
-        // Record info about this file.
-        let dedup_file = DedupFile {
-            path: fs::canonicalize(path)?,
-            size: metadata.len(),
-            dev: metadata.dev(),
-            ino: metadata.ino(),
-            nlink: metadata.nlink(),
-            hash: Some(calc_crc32(path)?),
-        };
-        dedup_files.push(dedup_file);
-    }
-
-    // If it's not a directory and it's not a file, then we don't care.  Perhaps it's a symlink,
-    // socket, pipe or block/character special.
-    Ok(dedup_files)
-}
+mod html;
+use html::write_dupes_html;
 
 // Parse a string describing the size of a file, with optional SI or IEC unit prefix.
 fn parse_file_size_spec(s: &str) -> Result<u64> {
@@ -132,18 +72,51 @@ fn main() -> Result<()> {
 
     // Traverse the filesystem.  Since we expect to be limited by disk I/O, there may be no
     // performance benefit from parallelism.
-    let dedup_files = visit(target, min_size)?;
-
-    // For now, we output results in CSV format to placate Rust's dead code analysis.
-    for d in dedup_files {
-        let d_path = d.path.to_str().unwrap();
-        match d.hash {
-            Some(d_hash) => println!(
-                "{},{},{},{},{},{}",
-                d_path, d.size, d.dev, d.ino, d.nlink, d_hash
-            ),
-            None => println!("{},{},{},{},{},None", d_path, d.size, d.dev, d.ino, d.nlink),
+    //
+    // Consolidate  by device number and inode -- i.e. find multiple hard links to the same file
+    // on disk.  It's going to take some time to traverse the filesystem, so if we were to group
+    // by size first, there's a risk the file could change as we're traversing.
+    let mut files_by_inode: HashMap<(u64, u64), DedupFile> = HashMap::new();
+    for f in group_by_inode(target, min_size) {
+        let ino = (f.device, f.inode);
+        match files_by_inode.get_mut(&ino) {
+            Some(existing_f) => {
+                // We found another hard link to a file on disk we've already seen.  Since we have
+                // a single thread, we use the updated details from the new one.
+                assert_eq!(f.paths.len(), 1);
+                existing_f.paths.push(f.paths[0].to_path_buf());
+                existing_f.size = f.size;
+                existing_f.nlink = f.nlink;
+            }
+            None => {
+                files_by_inode.insert(ino, f);
+            }
         }
     }
+
+    // Now group our consolidated list of files on disk by size.
+    let mut dupes_by_size: HashMap<u64, Vec<DedupFile>> = HashMap::new();
+    for f in files_by_inode.into_values() {
+        match dupes_by_size.get_mut(&f.size) {
+            Some(existing_f) => {
+                existing_f.push(f);
+            }
+            None => {
+                dupes_by_size.insert(f.size, vec![f]);
+            }
+        }
+    }
+
+    // Finally, check the list of files by size to find which are actually the same data.
+    let shortlist: Vec<Vec<DedupFile>> = dupes_by_size
+        .into_values()
+        .filter(|grp| grp.len() > 1)
+        .collect();
+    let dupes_by_content: Vec<Vec<DedupFile>> = group_by_content(shortlist).collect();
+
+    // Write results to stdout as HTML.
+    let mut dest = io::stdout();
+    write_dupes_html(&mut dest, &dupes_by_content);
+
     Ok(())
 }
