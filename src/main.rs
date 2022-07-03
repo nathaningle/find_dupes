@@ -43,7 +43,7 @@ fn main() -> Result<()> {
     use clap::{App, Arg};
 
     // Parse command-line arguments.
-    let matches = App::new("file-dedup")
+    let matches = App::new("find_dupes")
         .about("Identify duplicate files")
         .arg(
             Arg::with_name("PATH")
