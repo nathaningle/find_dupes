@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -9,9 +8,6 @@ use group_by_inode::{group_by_inode, DedupFile};
 
 mod group_by_content;
 use group_by_content::group_by_content;
-
-mod html;
-use html::write_dupes_html;
 
 // Parse a string describing the size of a file, with optional SI or IEC unit prefix.
 fn parse_file_size_spec(s: &str) -> Result<u64> {
@@ -114,9 +110,8 @@ fn main() -> Result<()> {
         .collect();
     let dupes_by_content: Vec<Vec<DedupFile>> = group_by_content(shortlist).collect();
 
-    // Write results to stdout as HTML.
-    let mut dest = io::stdout();
-    write_dupes_html(&mut dest, &dupes_by_content);
+    // Write results to stdout as JSON.
+    println!("{}", serde_json::to_string(&dupes_by_content).unwrap());
 
     Ok(())
 }

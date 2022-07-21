@@ -3,8 +3,10 @@ use std::fs::{self, DirEntry, Metadata};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 // Vital stats of a file.
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct DedupFile {
     pub paths: Vec<PathBuf>,
     pub size: u64,
