@@ -1,12 +1,14 @@
 # find_dupes
 
 Identify duplicate files in a Linux/Unix filesystem hierarchy.  Tested on Debian and OpenBSD.
-Outputs a HTML table to stdout.
+Outputs JSON to stdout.
 
 
 ## Usage
 
-``` find_dupes Identify duplicate files
+```
+find_dupes
+Identify duplicate files
 
 USAGE:
     find_dupes [OPTIONS] <PATH>
