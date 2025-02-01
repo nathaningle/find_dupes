@@ -40,19 +40,18 @@ fn parse_file_size_spec(s: &str) -> Result<u64> {
 }
 
 fn main() -> Result<()> {
-    use clap::{App, Arg};
+    use clap::{command, Arg};
 
     // Parse command-line arguments.
-    let matches = App::new("find_dupes")
-        .about("Identify duplicate files")
+    let matches = command!()
         .arg(
-            Arg::with_name("PATH")
+            Arg::new("PATH")
                 .help("Location to search")
                 .required(true)
                 .index(1),
         )
         .arg(
-            Arg::with_name("MIN_SIZE")
+            Arg::new("MIN_SIZE")
                 .long("min-size")
                 .help("Ignore files smaller than this (bytes)")
                 .default_value("100000"),
@@ -61,12 +60,12 @@ fn main() -> Result<()> {
 
     let target = Path::new(
         matches
-            .value_of("PATH")
+            .get_one::<String>("PATH")
             .expect("Failed to read PATH from command-line arguments"),
     );
 
     let min_size_str = matches
-        .value_of("MIN_SIZE")
+        .get_one::<String>("MIN_SIZE")
         .expect("Failed to find MIN_SIZE argument despite clap default_value");
     let min_size: u64 = parse_file_size_spec(min_size_str)?;
 
